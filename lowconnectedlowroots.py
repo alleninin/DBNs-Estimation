@@ -1,0 +1,144 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.optimize import minimize
+import networkx as nx
+
+np.random.seed(305)
+
+def simulate_general_graph_step(adj_matrix, true_alphas, nonlinear_func, sigma=0.01, N=1000):
+    n_nodes = len(adj_matrix)
+    X_t0 = np.random.normal(-1, 1, size=(n_nodes, N))
+    X_t1 = np.zeros((n_nodes, N))
+
+    for i in range(n_nodes):
+        parents = np.where(adj_matrix[:, i] == 1)[0]
+
+        if len(parents) == 0:
+            X_t1[i] = np.random.normal(0, 1, N)
+        else:
+            inputs = [true_alphas[(j, i)] * X_t0[j] for j in parents]
+            mu = nonlinear_func(*inputs)
+            X_t1[i] = np.random.normal(mu, sigma)
+
+    return X_t0, X_t1
+def plot_graph_structure(adj_matrix):
+    G = nx.DiGraph()
+    n = len(adj_matrix)
+    for i in range(n):
+        G.add_node(i)
+    for i in range(n):
+        for j in range(n):
+            if adj_matrix[i][j] == 1:
+                G.add_edge(i, j)
+    pos = nx.spring_layout(G, seed=42)
+    plt.figure(figsize=(8, 6))
+    nx.draw(G, pos, with_labels=True, arrows=True, node_size=700, node_color='lightblue', edge_color='gray')
+    plt.title("Graph Structure (DAG)")
+    plt.show()
+
+def estimate_general_alphas_mle(adj_matrix, X_t0, X_t1, nonlinear_func, target_edges):
+    def loss(alpha_vec):
+        loss_val = 0.0
+        alpha_map = {edge: alpha_vec[i] for i, edge in enumerate(target_edges)}
+
+        for (j, i) in target_edges:
+            parents = np.where(adj_matrix[:, i] == 1)[0]
+            inputs = [alpha_map[(p, i)] * X_t0[p] for p in parents]
+            mu = nonlinear_func(*inputs)
+            loss_val += np.mean((X_t1[i] - mu) ** 2)
+
+        return loss_val
+
+    init_alpha = np.ones(len(target_edges))
+    res = minimize(loss, init_alpha, method='BFGS')
+    return res.x
+
+def estimate_general_alphas_map(adj_matrix, X_t0, X_t1, nonlinear_func, target_edges, sigma2=0.01**2, tau2=1.0):
+    lambda_reg = sigma2 / tau2
+
+    def loss(alpha_vec):
+        loss_val = 0.0
+        alpha_map = {edge: alpha_vec[i] for i, edge in enumerate(target_edges)}
+
+        for (j, i) in target_edges:
+            parents = np.where(adj_matrix[:, i] == 1)[0]
+            inputs = [alpha_map[(p, i)] * X_t0[p] for p in parents]
+            mu = nonlinear_func(*inputs)
+            loss_val += np.mean((X_t1[i] - mu) ** 2)
+
+        loss_val += lambda_reg * np.sum(alpha_vec ** 2)
+        return loss_val
+
+    init_alpha = np.ones(len(target_edges))
+    res = minimize(loss, init_alpha, method='BFGS')
+    return res.x
+
+def plot_general_alpha_errors(adj_matrix, true_alphas, nonlinear_func, sample_sizes):
+    edges = [(i, j) for i in range(len(adj_matrix)) for j in range(len(adj_matrix)) if adj_matrix[i, j] == 1]
+    errors_mle = []
+    errors_map = []
+
+    for N in sample_sizes:
+        X_t0, X_t1 = simulate_general_graph_step(adj_matrix, true_alphas, nonlinear_func, N=N)
+
+        alpha_hat_mle = estimate_general_alphas_mle(adj_matrix, X_t0, X_t1, nonlinear_func, edges)
+        true_alpha_vec = np.array([true_alphas[edge] for edge in edges])
+        error_mle = np.linalg.norm(alpha_hat_mle - true_alpha_vec)
+        errors_mle.append(error_mle)
+
+        alpha_hat_map = estimate_general_alphas_map(adj_matrix, X_t0, X_t1, nonlinear_func, edges)
+        error_map = np.linalg.norm(alpha_hat_map - true_alpha_vec)
+        errors_map.append(error_map)
+
+        print(f"N={N}, MLE Error={error_mle:.4f}, MAP Error={error_map:.4f}")
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(sample_sizes, errors_mle, marker='o', label='MLE ||α̂ - α||')
+    plt.plot(sample_sizes, errors_map, marker='s', label='MAP ||α̂ - α||')
+    plt.xlabel('Sample Size (N)')
+    plt.ylabel('Alpha Error Norm')
+    plt.title('Nonlinear Alpha Estimation Error for less Connected, Low Root graph (Tree)')
+    plt.grid(True)
+    plt.xscale('log')
+    plt.yscale('log')
+    plt.legend()
+    plt.savefig("highlyconnectedhighroots.svg", format="svg")
+    plt.show()
+
+# --- Main ---
+if __name__ == "__main__":
+##    n = 10
+##    adj_matrix = np.array([
+##     [0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+##     [0, 0, 0, 0, 0, 0, 1, 0, 0, 0],
+##     [0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+##     [0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+##     [0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+##     [0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+##     [0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+##     [0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+##     [0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+##     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]])
+    n=3
+    adj_matrix = np.array([
+        [0,0,1],
+        [0,0,1],
+        [0,0,0]
+    ])
+##    for i in range(1, n):
+##        adj_matrix[i - 1, i] = 1
+##        if i >= 2:
+##            adj_matrix[i - 2, i] = 1
+##        if i>=3:
+##            adj_matrix[i-3,i]=1
+    #plot_graph_structure(adj_matrix)
+    edges = [(i, j) for i in range(n) for j in range(n) if adj_matrix[i, j] == 1]
+    true_alphas = {edge: np.random.uniform(0.5, 2.0) for edge in edges}
+
+    def nonlinear_func(*args):
+        return np.sin(np.sum(args, axis=0))
+
+##    sample_sizes = [2,4,10,16,32,64, 80, 100, 160, 320, 500, 1000, 2000, 5000, 10000]
+    sample_sizes = [1,2,5,10, 50, 100, 500, 1000, 5000, 10000,50000,100000,500000,1000000]
+
+    plot_general_alpha_errors(adj_matrix, true_alphas, nonlinear_func, sample_sizes)
